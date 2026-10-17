@@ -3,6 +3,7 @@ import pandas as pd
 from tablelinker.evaluate import score
 from tablelinker.linker import find_links
 from tablelinker.naming import name_similarity, tokens
+from tablelinker.rename import rename, rename_dataset
 
 
 def test_tokens_split_camel_and_snake_case():
@@ -55,6 +56,27 @@ def test_shared_primary_key_is_a_foreign_key():
 def test_empty_table_is_linked_by_name():
     links = _by_column(find_links(_tables())[0])
     assert links[("audits", "order_id")].best.parent_table == "orders"
+
+
+def test_rename_keeps_style_and_id_words():
+    m = {"support": "help", "rep": "agent", "report": "answer", "to": "to", "order": "purchase",
+         "detail": "line", "manager": "boss", "staff": "personnel"}
+    assert rename("SupportRepId", m) == "HelpAgentId"
+    assert rename("ReportsTo", m) == "AnswersTo"
+    assert rename("Order Details", m) == "Purchase Lines"
+    assert rename("manager_staff_id", m) == "boss_personnel_id"
+
+
+def test_renamed_data_links_the_same_way():
+    tables = _tables()
+    truth = [{"child_table": "orders", "child_col": "customer_id", "parent_table": "customers", "parent_col": "id"}]
+    m = {"customer": "client", "order": "purchase", "quantity": "amount", "name": "label",
+         "note": "remark", "audit": "review"}
+    new_tables, new_truth = rename_dataset(tables, truth, m)
+    links = _by_column(find_links(new_tables)[0])
+    assert new_truth[0]["child_col"] == "client_id"
+    link = links[("purchases", "client_id")]
+    assert (link.best.parent_table, link.best.parent_col) == ("clients", "id")
 
 
 def test_score():

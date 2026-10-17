@@ -3,8 +3,12 @@ python run.py prepare            # download the sample databases, export to sche
 python run.py eval               # heuristic-only results
 python run.py eval --llm         # heuristics + LLM judge for ambiguous columns
 python run.py link data/csv/chinook --llm   # print every inferred relationship for one dataset
+
+python run.py rename                         # copy of the data with every name replaced by a synonym
+python run.py eval --llm --data data/csv_renamed
 """
 import argparse
+import json
 import urllib.request
 from pathlib import Path
 
@@ -46,6 +50,27 @@ def cmd_prepare(_):
         print(f"{name}: {len(tables)} tables, {len(truth)} foreign keys")
 
 
+def cmd_rename(_):
+    from tablelinker.rename import make_synonyms, rename_dataset, vocabulary
+    for name in DATASETS:
+        src, out = Path("data/csv") / name, Path("data/csv_renamed") / name
+        tables = load_tables(src)
+        syn_file = Path("benchmarks/synonyms") / f"{name}.json"
+        if syn_file.exists():
+            mapping = json.loads(syn_file.read_text())
+        else:
+            from tablelinker.llm_judge import make_client
+            mapping = make_synonyms(vocabulary(tables), *make_client())
+            syn_file.parent.mkdir(parents=True, exist_ok=True)
+            syn_file.write_text(json.dumps(mapping, indent=2, sort_keys=True))
+        new_tables, new_truth = rename_dataset(tables, load_truth(src), mapping)
+        out.mkdir(parents=True, exist_ok=True)
+        for table, df in new_tables.items():
+            df.to_csv(out / f"{table}.csv", index=False)
+        (out / "_ground_truth.json").write_text(json.dumps(new_truth, indent=2))
+        print(f"{name}: {', '.join(list(new_tables)[:6])} ...")
+
+
 def cmd_link(args):
     for link in infer(args.csv_dir, args.llm):
         if link.best:
@@ -60,7 +85,7 @@ def cmd_link(args):
 def cmd_eval(args):
     rows, total = [], {"tp": 0, "fp": 0, "fn": 0}
     for name in DATASETS:
-        csv_dir = Path("data/csv") / name
+        csv_dir = Path(args.data) / name
         links = infer(csv_dir, args.llm)
         predicted = [l.key() for l in links if l.status.startswith("accepted")]
         s = score(predicted, load_truth(csv_dir))
@@ -75,7 +100,7 @@ def cmd_eval(args):
     p = total["tp"] / (total["tp"] + total["fp"]) if total["tp"] + total["fp"] else 0
     r = total["tp"] / (total["tp"] + total["fn"]) if total["tp"] + total["fn"] else 0
     f = 2 * p * r / (p + r) if p + r else 0
-    print(f"\nMode: {'heuristics + LLM' if args.llm else 'heuristics only'}")
+    print(f"\nMode: {'heuristics + LLM' if args.llm else 'heuristics only'}  ({args.data})")
     print("| Dataset | FKs | Found | False pos. | Precision | Recall | F1 |")
     print("|---|---|---|---|---|---|---|")
     for name, s in rows:
@@ -89,8 +114,10 @@ def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("prepare").set_defaults(fn=cmd_prepare)
+    sub.add_parser("rename").set_defaults(fn=cmd_rename)
     e = sub.add_parser("eval")
     e.add_argument("--llm", action="store_true")
+    e.add_argument("--data", default="data/csv", help="data/csv_renamed for the synonym-renamed copy")
     e.set_defaults(fn=cmd_eval)
     l = sub.add_parser("link")
     l.add_argument("csv_dir")
